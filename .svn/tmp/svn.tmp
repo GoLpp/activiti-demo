@@ -1,0 +1,151 @@
+package org.activiti.designer.test;
+
+import java.io.FileInputStream;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.activiti.engine.RepositoryService;
+import org.activiti.engine.repository.Deployment;
+import org.activiti.engine.repository.ProcessDefinition;
+import org.activiti.engine.runtime.ProcessInstance;
+import org.activiti.engine.task.Task;
+import org.activiti.engine.test.ActivitiRule;
+import org.junit.Assert;
+import org.junit.Rule;
+import org.junit.Test;
+
+public class ProcessTestMyProcess {
+
+	private String filename = "D:\\PhaseThree\\ActivitiDemo-teacher\\src\\main\\resources\\diagrams\\LeaveDemo.bpmn";
+
+	@Rule
+	public ActivitiRule activitiRule = new ActivitiRule();
+
+	
+	private void deploy() throws Exception {
+		RepositoryService repositoryService = activitiRule.getRepositoryService();
+		Deployment d = repositoryService.createDeployment().addInputStream("leaveDemo.bpmn20.xml", new FileInputStream(filename))
+				.deploy();
+		Assert.assertNotNull(d);
+	}
+
+	private final static String DEF_PROCESS = "leaveDemo";
+
+	private final static String ID_STAFF = "2";
+
+	private final static String ID_MANAGER = "1";
+
+	private final static String TASK_KEY_APPLY = "taskLeaveApply";
+
+	private final static String TASK_KEY_REVIEW = "taskLeaveReview";
+
+	/**
+	 * 
+	 * @throws Exception
+	 */
+	@Test
+	public void startLeave() throws Exception {
+		// 1.获取RepositoryService，发布流程
+		deploy();
+		// 2.启动流程
+		// 获取最新版本的流程定义
+		ProcessDefinition pd = activitiRule.getRepositoryService().createProcessDefinitionQuery()
+				.processDefinitionKey(DEF_PROCESS).latestVersion().singleResult();
+		System.out.println("ProcessDefinition-id:" + pd.getId());
+		System.out.println("ProcessDefinition-key:" + pd.getKey());
+		// 设置开始节点的表单数据
+		Map<String, String> startFormData = new HashMap<String, String>();
+		startFormData.put("staffId", ID_STAFF);
+		// 提交开始事件表单数据，启动流程
+		ProcessInstance pi = activitiRule.getFormService().submitStartFormData(pd.getId(), startFormData);
+		Assert.assertNotNull(pi);
+		System.out.println("ProcessInstance-id:" + pi.getId());
+		// 3.提交申请任务
+		// 根据流程实例ID获取任务
+		Task taskApply = activitiRule.getTaskService().createTaskQuery().processInstanceId(pi.getId()).singleResult();
+		System.out.println("Task-id:" + taskApply.getId());
+		System.out.println("Task-key:" + taskApply.getTaskDefinitionKey());
+		// 设置任务的执行人
+		activitiRule.getTaskService().setAssignee(taskApply.getId(), ID_STAFF);
+		// 设置任务表单数据
+		Map<String, String> applyFormData = new HashMap<String, String>();
+		applyFormData.put("reason", "家有喜事，请假3天");
+		// 提交任务表单数据，结束该任务
+		activitiRule.getFormService().submitTaskFormData(taskApply.getId(), applyFormData);
+		// 4.验证下一个任务
+		Task taskReview = activitiRule.getTaskService().createTaskQuery().processInstanceId(pi.getId()).singleResult();
+		Assert.assertTrue(taskReview != null && TASK_KEY_REVIEW.equals(taskReview.getTaskDefinitionKey()));
+		System.out.println("Task-id:" + taskReview.getId());
+		System.out.println("Task-key:" + taskReview.getTaskDefinitionKey());
+		// activitiRule.getTaskService().addCandidateUser(taskReview.getId(),
+		// "1");
+	}
+
+	@Test
+	public void appoveLeave() throws Exception {
+		startLeave();
+		// 1.获取待管理者处理的任务
+		String pdId = activitiRule.getRepositoryService().createProcessDefinitionQuery()
+				.processDefinitionKey(DEF_PROCESS).latestVersion().singleResult().getId();
+		List<Task> tasks = activitiRule.getTaskService().createTaskQuery().taskDefinitionKey(TASK_KEY_REVIEW)
+				.processDefinitionId(pdId).taskCandidateUser(ID_MANAGER).list();
+		Assert.assertEquals(1, tasks.size());
+		// 2.从任务列表中选择一个进行处理
+		Task taskReview = tasks.get(0);
+		// 设置任务表单数据
+		Map<String, String> reviewFormData = new HashMap<String, String>();
+		reviewFormData.put("result", "true");
+		reviewFormData.put("remark", "人之常情，我看行");
+		activitiRule.getFormService().submitTaskFormData(taskReview.getId(), reviewFormData);
+		// 3.验证流程已经结束
+		ProcessInstance pi = activitiRule.getRuntimeService().createProcessInstanceQuery()
+				.processInstanceId(taskReview.getProcessInstanceId()).singleResult();
+		Assert.assertNull(pi);
+	}
+
+	@Test
+	public void refuseLeave() throws Exception {
+		startLeave();
+		// 1.获取待管理者处理的任务
+		String pdId = activitiRule.getRepositoryService().createProcessDefinitionQuery()
+				.processDefinitionKey(DEF_PROCESS).latestVersion().singleResult().getId();
+		List<Task> tasks = activitiRule.getTaskService().createTaskQuery().taskDefinitionKey(TASK_KEY_REVIEW)
+				.processDefinitionId(pdId).taskCandidateUser(ID_MANAGER).list();
+		Assert.assertEquals(1, tasks.size());
+		// 2.从任务列表中选择一个进行处理
+		Task taskReview = tasks.get(0);
+		// 设置任务表单数据
+		Map<String, String> reviewFormData = new HashMap<String, String>();
+		reviewFormData.put("result", "false");
+		reviewFormData.put("remark", "项目太紧了，换个时间吧");
+		activitiRule.getFormService().submitTaskFormData(taskReview.getId(), reviewFormData);
+		// 3.验证流程打回
+		Task taskApply = activitiRule.getTaskService().createTaskQuery()
+				.processInstanceId(taskReview.getProcessInstanceId()).singleResult();
+		Assert.assertTrue(taskApply != null && TASK_KEY_APPLY.equals(taskApply.getTaskDefinitionKey()));
+	}
+
+	@Test
+	public void applyAgain() throws Exception {
+		this.refuseLeave();
+		// 1.获取待工作人员处理的任务
+		String pdId = activitiRule.getRepositoryService().createProcessDefinitionQuery()
+				.processDefinitionKey(DEF_PROCESS).latestVersion().singleResult().getId();
+		List<Task> tasks = activitiRule.getTaskService().createTaskQuery().taskDefinitionKey(TASK_KEY_APPLY)
+				.processDefinitionId(pdId).taskCandidateUser(ID_STAFF).list();
+		Assert.assertEquals(1, tasks.size());
+		// 2.提交申请任务
+		Task taskApply = tasks.get(0);
+		// 设置任务表单数据
+		Map<String, String> applyFormData = new HashMap<String, String>();
+		applyFormData.put("reason", "家有喜事，请假3天");
+		// 提交任务表单数据，结束该任务
+		activitiRule.getFormService().submitTaskFormData(taskApply.getId(), applyFormData);
+		// 3.验证下一个任务
+		Task taskReview = activitiRule.getTaskService().createTaskQuery().taskDefinitionKey(TASK_KEY_REVIEW)
+				.processInstanceId(tasks.get(0).getProcessInstanceId()).singleResult();
+		Assert.assertTrue(taskReview != null && TASK_KEY_REVIEW.equals(taskReview.getTaskDefinitionKey()));
+	}
+
+}
